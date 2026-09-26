@@ -1,0 +1,117 @@
+#!/bin/bash
+#
+# phone —— 容器里的 Agent 通过它调用手机能力。
+#
+# 这个文件由 phoneagent 部署，不要手动修改（下次启动会被覆盖）。
+#
+# ## 为什么是 bash + /dev/tcp
+#
+#   - Unix domain socket：Android 的 Java API 只支持抽象命名空间，Node 侧连接支持差
+#   - socat / nc：容器里不一定装了，为一个 CLI 去装包不划算
+#   - Node：能连，但会让这个 CLI 依赖 Node 存在
+#   bash 内建的 /dev/tcp 零依赖，直接可用。
+#
+# ## 为什么参数要 base64
+#
+# 手写 JSON 转义在 shell 里非常容易出错：bash 的双引号会先吃掉一层反斜杠，
+# sed 的转义规则又因实现而异（GNU sed 与 busybox/BSD sed 行为不同）。
+# base64 的字符集只有 [A-Za-z0-9+/=]，**在 JSON 里永远不需要转义** ——
+# 与其和引用规则搏斗，不如换一种不需要转义的编码。
+#
+# ## 安全
+#
+# 令牌由 App 每次启动随机生成，只写在 App 私有目录里。其它应用即使扫到端口
+# 也拿不到令牌。真正决定「能不能做」的是 App 侧的白名单。
+#
+set -u
+
+ENDPOINT_FILE="/run/phoneagent/endpoint"
+
+die() { echo "phone: $*" >&2; exit 1; }
+
+[ -r "$ENDPOINT_FILE" ] || die "读不到 $ENDPOINT_FILE —— 容器不是通过 phoneagent 启动的？"
+
+PORT=""; TOKEN=""
+while IFS='=' read -r k v; do
+  case "$k" in
+    PORT)  PORT="$v" ;;
+    TOKEN) TOKEN="$v" ;;
+  esac
+done < "$ENDPOINT_FILE"
+
+[ -n "$PORT" ]  || die "endpoint 文件里没有 PORT"
+[ -n "$TOKEN" ] || die "endpoint 文件里没有 TOKEN"
+
+if [ "$#" -eq 0 ]; then
+  cat >&2 <<'EOF'
+用法: phone <指令> [参数...]
+
+指令:
+  notify <标题> <正文>     发一条手机通知
+  alarm  <HH:MM> <说明>    设一个闹钟提醒
+  list                     列出当前允许的指令
+
+这个工具让你能对用户的手机做有限的事。可用指令由用户在 App 里控制，
+不在白名单内的指令会被明确拒绝并告诉你原因 —— 遇到拒绝不要反复重试。
+
+注意：传文件请走 /bridge/out/，不要用这个工具。
+EOF
+  exit 2
+fi
+
+command -v base64 >/dev/null 2>&1 || die "缺少 base64 命令"
+
+# 用 URL-safe base64（`-` `_` 代替 `+` `/`），与 App 侧一致。
+#
+# 为什么不用标准 base64：它会产出 `/`，而 Android 的 org.json 默认把 `/` 转义成 `\/`
+# —— 响应里一旦出现 `\/`，下面那条提取正则（只认 base64 字符集）就匹配不上，
+# 报一个很误导人的「响应无法解析」。而且 `/` 出现与否取决于内容，所以那个 bug
+# 是间歇性的：同样的代码，有的命令成功、有的失败。
+#
+# coreutils 的 base64 只认标准字母表，所以两边各做一次翻译。
+b64()   { printf '%s' "$1" | base64 -w0 | tr -- '+/' '-_'; }
+unb64() { tr -- '-_' '+/' | base64 -d 2>/dev/null; }
+
+CMD="$1"; shift
+ARGS=""
+for a in "$@"; do
+  [ -n "$ARGS" ] && ARGS="$ARGS,"
+  ARGS="$ARGS\"$(b64 "$a")\""
+done
+
+REQUEST="{\"token\":\"$TOKEN\",\"cmd\":\"$(b64 "$CMD")\",\"args\":[$ARGS]}"
+
+# 与 App 通信。用 bash 内建的 /dev/tcp；路径不要加引号，加了可能不认这个特殊处理。
+exec 3<>/dev/tcp/127.0.0.1/$PORT || die "连不上 App（端口 $PORT）—— 容器还在运行吗？"
+printf '%s\n' "$REQUEST" >&3
+
+IFS= read -r RESPONSE <&3
+exec 3>&-
+exec 3<&-
+
+[ -n "$RESPONSE" ] || die "App 没有回应"
+
+# body 是 base64，字符集安全，这里只需取出来再解码，不涉及转义。
+case "$RESPONSE" in
+  *'"ok":true'*)  OK=1 ;;
+  *)              OK=0 ;;
+esac
+
+# body 是 URL-safe base64，字符集 [A-Za-z0-9_-] 加结尾的 =，不含需要转义的字符。
+BODY=$(printf '%s' "$RESPONSE" | sed -n 's/.*"body":"\([A-Za-z0-9_-]*=\{0,2\}\)".*/\1/p')
+
+if [ -z "$BODY" ]; then
+  # 拿不到 body 就把原始响应打出来，便于排查
+  [ "$OK" = "1" ] && { echo "已执行"; exit 0; }
+  die "被拒绝（响应无法解析：$RESPONSE）"
+fi
+
+TEXT=$(printf '%s' "$BODY" | unb64)
+
+if [ "$OK" = "1" ]; then
+  [ -n "$TEXT" ] && echo "$TEXT"
+  exit 0
+else
+  echo "phone: $TEXT" >&2
+  exit 1
+fi

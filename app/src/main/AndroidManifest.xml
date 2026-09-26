@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      容器里的网络其实是宿主进程的网络：proot 不做网络命名空间隔离，
+      apt / npm 发出的请求就是本应用发出的，因此受本应用的权限约束。
+      没有 INTERNET 的话，容器里一切联网操作都会失败。
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 用于读取当前生效网络的 DNS 服务器，写进容器的 /etc/resolv.conf -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
+      容器里的 Agent 通过 phone 指令调用手机能力（见 PhoneServer / PhonePolicy）。
+      每一条都由应用侧的白名单校验 —— 那才是容器与手机之间的安全边界。
+    -->
+    <!-- Agent 可以发通知告诉你它做完了什么 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Agent 可以设闹钟提醒（普通权限，安装即授予） -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
+    <!--
+      extractNativeLibs 必须显式为 true。
+      我们随 APK 分发的是「假 .so」可执行文件（proot 及其 loader），
+      它们必须被安装器真正解压到 nativeLibraryDir 才能执行 —— 那里的 SELinux
+      标签是 apk_data_file，在所有 targetSdk 下都允许 execve，是 W^X 规则之外的口子。
+    -->
+    <application
+        android:label="phoneagent"
+        android:extractNativeLibs="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

@@ -1,0 +1,25 @@
+# 行尾统一成 LF。
+#
+# 必须显式声明：Windows 上 `core.autocrlf` 默认是 true，检出时会把文本文件
+# 转成 CRLF —— 而 `gradlew`、`scripts/*.sh`、`assets/phone/phone` 都是 shell
+# 脚本，**带 CRLF 会直接跑不起来**（`bad interpreter: No such file or directory`）。
+# 在 Windows 上 clone 一次就中招，且报错信息完全指不到行尾。
+#
+# `eol=lf` 比 `text=auto` 更明确：无论谁在什么平台上检出，都是 LF。
+* text=auto eol=lf
+
+# 例外：Windows 批处理。cmd.exe 对 LF-only 的 .bat 在某些结构（goto/label）上会出错，
+# 这类文件必须保持 CRLF。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制：不要做任何行尾转换，也不要尝试 diff。
+*.so        binary
+*.png       binary
+*.jpg       binary
+*.jar       binary
+*.crt       binary
+*.keystore  binary
+
+# Gradle wrapper 的 jar 必须逐字节保持原样，否则校验失败。
+gradle/wrapper/gradle-wrapper.jar binary

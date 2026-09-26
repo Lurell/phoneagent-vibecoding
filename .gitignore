@@ -1,0 +1,29 @@
+# --- 构建产物 ---
+build/
+.gradle/
+# CMake/NDK 的中间产物（app/.cxx 下有几十个文件，不该进版本库）
+.cxx/
+*.apk
+*.aab
+
+# --- 本机专属 ---
+local.properties
+.toolchain/
+
+# --- IDE ---
+# Android Studio 的工程描述文件含本机路径与个人设置，不进版本库。
+.idea/
+*.iml
+
+# --- 崩溃日志 ---
+hs_err_pid*.log
+
+# --- 大体积资产：由 scripts/fetch-assets.sh 生成，不进版本库 ---
+# (rootfs ~29MB + proot 二进制；见 README「资产从哪来」)
+app/src/main/jniLibs/
+app/src/main/assets/rootfs/
+
+# --- 临时目录 ---
+.tmp-verify/
+.shots/
+*.log
